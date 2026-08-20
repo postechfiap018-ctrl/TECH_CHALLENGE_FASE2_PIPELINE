@@ -1,0 +1,44 @@
+# Credenciais - NUNCA versionar
+*.json
+!infra/iam_policies/*.json
+.env
+.env.*
+credentials*
+*service-account*.json
+*-key.json
+
+# AWS / GCP
+.aws/
+gcloud/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Dados baixados localmente (ficam só no S3)
+data/
+*.parquet
+*.csv.gz
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Material de aula (nao faz parte do entregavel do repositorio)
+*.pdf
+
+# Notebook de rascunho anterior (substituido por notebooks/pipeline_alfabetizacao.ipynb)
+/AWS.ipynb
+
+# Terraform-like state, se vier a existir
+*.tfstate
+*.tfstate.backup
+.terraform/
