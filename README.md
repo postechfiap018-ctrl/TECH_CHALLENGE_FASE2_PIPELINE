@@ -326,16 +326,16 @@ garanta que a **BigQuery API** está ativada e que a service account tem o papel
 
 ### 3. Conectar ao GitHub
 
-Você mencionou que já tem um repositório vazio. Me passe a URL (ex.:
-`https://github.com/seu-usuario/tech-challenge-fase2.git`) para eu:
+Repositório: https://github.com/postechfiap018-ctrl/TECH_CHALLENGE_FASE2_PIPELINE
 
-1. Adicionar como `origin` neste repositório local;
-2. Criar os commits organizados por etapa (bronze, silver/gold, infra, qualidade, docs) em
-   branches de feature;
-3. Pedir sua confirmação antes de cada `git push` (não empurro nada sem você aprovar).
-
-Depois, no GitHub, você (ou eu, se preferir) abre os **Pull Requests** de cada branch de
-feature para `main`/`develop`, conforme exigido no enunciado.
+Já configurado como `origin` neste repositório local. O histórico foi organizado em `main`
+(estrutura inicial) + 6 branches de feature (`feature/bronze-ingestion`,
+`feature/silver-gold-glue`, `feature/streaming-lambdas`, `feature/infra-provisioning`,
+`feature/notebook-orchestration`, `feature/docs-readme`), cada uma com commits focados e
+descritivos. As branches **não** foram mescladas localmente de propósito: o merge para `main`
+deve acontecer via **Pull Request no GitHub**, conforme exigido no enunciado. Depois do
+`git push` (feito só com sua confirmação), abra um PR por branch, revise o diff e faça o
+merge — isso gera o histórico de PRs que a avaliação pede.
 
 ### 4. Provisionar a AWS
 
