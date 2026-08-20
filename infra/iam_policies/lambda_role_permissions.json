@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3BronzeWrite",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::{BUCKET}", "arn:aws:s3:::{BUCKET}/*"]
+    },
+    {
+      "Sid": "KinesisRead",
+      "Effect": "Allow",
+      "Action": [
+        "kinesis:GetRecords", "kinesis:GetShardIterator", "kinesis:DescribeStream",
+        "kinesis:DescribeStreamSummary", "kinesis:ListShards", "kinesis:ListStreams"
+      ],
+      "Resource": "arn:aws:kinesis:*:{ACCOUNT_ID}:stream/{KINESIS_STREAM_NAME}"
+    },
+    {
+      "Sid": "GlueJobControl",
+      "Effect": "Allow",
+      "Action": ["glue:StartJobRun", "glue:GetJobRuns", "glue:GetJobRun"],
+      "Resource": "arn:aws:glue:*:{ACCOUNT_ID}:job/{GLUE_SILVER_JOB_NAME}"
+    },
+    {
+      "Sid": "CloudWatchLogsAndMetrics",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "cloudwatch:PutMetricData"],
+      "Resource": "*"
+    }
+  ]
+}
