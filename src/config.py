@@ -7,7 +7,7 @@ import os
 # ---------------------------------------------------------------------------
 # AWS
 # ---------------------------------------------------------------------------
-AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "sa-east-1")
+AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-2")
 
 # Bucket unico do data lake, com prefixos bronze/silver/gold (medalhao).
 # Nomes de bucket S3 sao globais -> troque "aline" pelo seu sufixo se o nome
