@@ -206,14 +206,13 @@ def ensure_glue_job(job_name: str, script_s3_path: str, role_arn: str) -> None:
         WorkerType="G.1X",
         NumberOfWorkers=2,  # menor tamanho pratico (FinOps); aumente se o volume crescer
         Timeout=30,
-        Tags={t["Key"]: t["Value"] for t in TAGS},
     )
     try:
         glue.get_job(JobName=job_name)
-        glue.update_job(JobName=job_name, JobUpdate=config)
+        glue.update_job(JobName=job_name, JobUpdate=config)  # Tags nao e valido em update_job
         log(f"glue job {job_name} atualizado")
     except ClientError:
-        glue.create_job(Name=job_name, **config)
+        glue.create_job(Name=job_name, Tags={t["Key"]: t["Value"] for t in TAGS}, **config)
         log(f"glue job {job_name} criado")
 
 
@@ -248,14 +247,24 @@ def _zip_handler(handler_dir: Path) -> bytes:
 def ensure_lambda(function_name: str, handler_dir: Path, role_arn: str,
                    env: dict[str, str], timeout: int = 30) -> str:
     zip_bytes = _zip_handler(handler_dir)
+    exists = True
     try:
         lambda_client.get_function(FunctionName=function_name)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ResourceNotFoundException":
+            raise
+        exists = False
+
+    if exists:
+        waiter = lambda_client.get_waiter("function_updated_v2")
         lambda_client.update_function_code(FunctionName=function_name, ZipFile=zip_bytes)
+        waiter.wait(FunctionName=function_name)
         lambda_client.update_function_configuration(
             FunctionName=function_name, Environment={"Variables": env}, Timeout=timeout
         )
+        waiter.wait(FunctionName=function_name)
         log(f"lambda {function_name} atualizada")
-    except ClientError:
+    else:
         lambda_client.create_function(
             FunctionName=function_name,
             Runtime="python3.12",
@@ -301,19 +310,33 @@ def ensure_s3_trigger(function_name: str, function_arn: str) -> None:
         if exc.response["Error"]["Code"] != "ResourceConflictException":
             raise
 
-    s3.put_bucket_notification_configuration(
-        Bucket=DATALAKE_BUCKET,
-        NotificationConfiguration={
-            "LambdaFunctionConfigurations": [
-                {
-                    "LambdaFunctionArn": function_arn,
-                    "Events": ["s3:ObjectCreated:*"],
-                    "Filter": {"Key": {"FilterRules": [{"Name": "prefix", "Value": f"{BRONZE_PREFIX}/"}]}},
-                }
-            ]
-        },
-    )
-    log(f"trigger S3 ({BRONZE_PREFIX}/*) -> {function_name} configurado")
+    # A permissao recem-criada leva alguns segundos para propagar; sem o
+    # retry, put_bucket_notification_configuration pode falhar com
+    # InvalidArgument logo apos criar a Lambda pela primeira vez.
+    last_exc = None
+    for attempt in range(5):
+        try:
+            s3.put_bucket_notification_configuration(
+                Bucket=DATALAKE_BUCKET,
+                NotificationConfiguration={
+                    "LambdaFunctionConfigurations": [
+                        {
+                            "LambdaFunctionArn": function_arn,
+                            "Events": ["s3:ObjectCreated:*"],
+                            "Filter": {"Key": {"FilterRules": [{"Name": "prefix", "Value": f"{BRONZE_PREFIX}/"}]}},
+                        }
+                    ]
+                },
+            )
+            log(f"trigger S3 ({BRONZE_PREFIX}/*) -> {function_name} configurado")
+            return
+        except ClientError as exc:
+            last_exc = exc
+            if exc.response["Error"]["Code"] != "InvalidArgument":
+                raise
+            log(f"permissao ainda propagando, tentando de novo em 10s (tentativa {attempt + 1}/5)")
+            time.sleep(10)
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +411,17 @@ def main() -> None:
     ensure_glue_job(GLUE_SILVER_JOB_NAME, script_paths["silver"], glue_role_arn)
     ensure_glue_job(GLUE_GOLD_JOB_NAME, script_paths["gold"], glue_role_arn)
 
-    stream_arn = ensure_kinesis_stream()
+    # Kinesis (streaming) fica isolado: em contas AWS novas, o servico pode
+    # estar temporariamente bloqueado (SubscriptionRequiredException) ate a
+    # verificacao automatica da conta terminar. Isso nao deve impedir o
+    # resto do provisionamento (Lambdas, Athena, monitoramento).
+    stream_arn = None
+    try:
+        stream_arn = ensure_kinesis_stream()
+    except ClientError as exc:
+        log(f"AVISO: nao foi possivel criar o Kinesis Data Stream ({exc}). "
+            f"Rode 'python -m infra.provision_aws' de novo depois que o servico "
+            f"estiver liberado na conta.")
 
     consumer_arn = ensure_lambda(
         LAMBDA_STREAMING_CONSUMER_NAME,
@@ -396,7 +429,10 @@ def main() -> None:
         lambda_role_arn,
         env={"DATALAKE_BUCKET": DATALAKE_BUCKET},
     )
-    ensure_kinesis_event_source_mapping(LAMBDA_STREAMING_CONSUMER_NAME, stream_arn)
+    if stream_arn:
+        ensure_kinesis_event_source_mapping(LAMBDA_STREAMING_CONSUMER_NAME, stream_arn)
+    else:
+        log("pulando event source mapping Kinesis -> lambda (stream nao disponivel ainda)")
 
     trigger_arn = ensure_lambda(
         LAMBDA_TRIGGER_GLUE_NAME,
@@ -409,7 +445,7 @@ def main() -> None:
     ensure_athena_workgroup()
     ensure_monitoring()
 
-    log("provisionamento concluido.")
+    log("provisionamento concluido" + (" (com pendencia no Kinesis, ver aviso acima)" if not stream_arn else "") + ".")
     log(f"proximo passo: rode a extracao batch (src/bronze/extract_batch_bigquery.py) "
         f"para popular {BRONZE_PREFIX}/ e disparar a pipeline.")
 
