@@ -283,7 +283,7 @@ FUNDEB.
 
 ## Passo a passo de setup
 
-### 1. Criar o usuário IAM na AWS (você precisa fazer isso manualmente)
+### 1. Criar o usuário IAM na AWS
 
 1. Acesse o **AWS Console** → **IAM** → **Users** → **Create user**.
 2. Nome: `extrator-datalake` (ou o nome que preferir). **Não** marque acesso ao Console — só
@@ -324,20 +324,7 @@ garanta que a **BigQuery API** está ativada e que a service account tem o papel
 3. Guarde o caminho do arquivo JSON — o notebook vai pedir esse caminho (local) ou pedir
    upload do arquivo (Colab).
 
-### 3. Conectar ao GitHub
-
-Repositório: https://github.com/postechfiap018-ctrl/TECH_CHALLENGE_FASE2_PIPELINE
-
-Já configurado como `origin` neste repositório local. O histórico foi organizado em `main`
-(estrutura inicial) + 6 branches de feature (`feature/bronze-ingestion`,
-`feature/silver-gold-glue`, `feature/streaming-lambdas`, `feature/infra-provisioning`,
-`feature/notebook-orchestration`, `feature/docs-readme`), cada uma com commits focados e
-descritivos. As branches **não** foram mescladas localmente de propósito: o merge para `main`
-deve acontecer via **Pull Request no GitHub**, conforme exigido no enunciado. Depois do
-`git push` (feito só com sua confirmação), abra um PR por branch, revise o diff e faça o
-merge — isso gera o histórico de PRs que a avaliação pede.
-
-### 4. Provisionar a AWS
+### 3. Provisionar a AWS
 
 Depois dos passos 1–3, com `aws sts get-caller-identity` funcionando:
 
@@ -355,10 +342,3 @@ Silver/Gold → qualidade → Athena → visualizações).
 
 Ao terminar os testes/gravação do vídeo, rode `python -m infra.teardown_aws --yes` para
 remover os recursos da AWS e não deixar custo residual.
-
-## Vídeo executivo
-
-*(A gravar: até 5 minutos, linguagem executiva, cobrindo problema de negócio, arquitetura da
-solução, valor da pipeline para análises educacionais e potencial de uso em IA — ver roteiro
-sugerido nas seções [Contexto do problema](#contexto-do-problema) e
-[Aplicação em IA](#aplicação-em-ia) acima.)*
