@@ -43,14 +43,23 @@ pipeline resolve.
 Este projeto atua como um time de engenharia de dados de uma organização pública de análise
 educacional, integrando as seguintes entidades da plataforma **Base dos Dados**:
 
-| Entidade | Papel na pipeline |
-|---|---|
-| UF | Dimensão territorial (estado) |
-| Município | Dimensão territorial (município, chave `id_municipio`) |
-| Meta Alfabetização Brasil | Meta nacional por ano |
-| Meta Alfabetização por UF | Meta estadual por ano |
-| Meta Alfabetização por Município | Meta municipal por ano |
-| Dados de alunos / indicador | Resultado realizado do indicador por município/ano |
+| Entidade | Tabela no BigQuery | Papel na pipeline |
+|---|---|---|
+| UF | `br_bd_diretorios_brasil.uf` | Dimensão territorial (nome do estado) |
+| Município | `br_bd_diretorios_brasil.municipio` | Dimensão territorial (nome do município, chave `id_municipio`) |
+| UF (resultado) | `br_inep_avaliacao_alfabetizacao.uf` | Resultado realizado (`taxa_alfabetizacao`) por UF/ano/rede |
+| Município (resultado) | `br_inep_avaliacao_alfabetizacao.municipio` | Resultado realizado por município/ano/rede |
+| Meta Alfabetização Brasil | `br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_brasil` | Metas nacionais (2024-2030) |
+| Meta Alfabetização por UF | `br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_uf` | Metas estaduais (2024-2030) |
+| Meta Alfabetização por Município | `br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_municipio` | Metas municipais (2024-2030) |
+| Dados de alunos | `br_inep_avaliacao_alfabetizacao.alunos` | Microdados da avaliação (uma linha por aluno) |
+
+Os `table_id` acima foram confirmados diretamente na API da Base dos Dados (não por
+adivinhação), a partir do link que o próprio PDF do desafio aponta para o dataset
+["Avaliação da Alfabetização"](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72).
+As tabelas de meta trazem a trajetória de metas em colunas largas
+(`meta_alfabetizacao_2024` .. `meta_alfabetizacao_2030`) — a camada Silver despivota isso
+para um formato longo (`ano_meta`, `meta_valor`) antes de comparar com o resultado realizado.
 
 A integração dessas fontes permite comparar **meta vs. resultado realizado** em qualquer
 nível geográfico e acompanhar a evolução temporal rumo à meta de 2030.
@@ -81,7 +90,7 @@ flowchart LR
     end
 
     subgraph SilverGold["Silver / Gold - S3"]
-        S1[("silver/alfabetizacao_integrado")]
+        S1[("silver/resultado_municipio,\nresultado_uf, metas_*")]
         G1[("gold/indicador_por_municipio")]
         G2[("gold/comparacao_metas_resultados")]
         G3[("gold/evolucao_temporal_indicador")]
@@ -141,9 +150,13 @@ flowchart LR
    `trigger-glue-silver`, que dispara o **Glue Job Silver** (com debounce para não duplicar
    execuções concorrentes).
 4. O **Glue Job Silver** lê todas as entidades Bronze, limpa, padroniza tipos/nomes, trata
-   nulos e duplicidade, normaliza chaves e integra tudo em `silver/alfabetizacao_integrado`,
-   catalogando automaticamente no Glue Data Catalog.
-5. O **Glue Job Gold** lê a Silver integrada e produz os 3 datasets analíticos em `gold/`.
+   nulos e duplicidade, normaliza chaves, junta a dimensão territorial (nome do
+   município/UF) aos resultados realizados, e **despivota** as tabelas de meta (que trazem
+   uma coluna por ano-alvo, `meta_alfabetizacao_2024`..`meta_alfabetizacao_2030`) para o
+   formato longo (`ano_meta`, `meta_valor`) — grava tudo em `silver/resultado_municipio`,
+   `silver/resultado_uf`, `silver/metas_municipio`, `silver/metas_uf`, `silver/metas_brasil`
+   e `silver/alunos`, catalogando automaticamente no Glue Data Catalog.
+5. O **Glue Job Gold** lê os datasets da Silver e produz os 3 datasets analíticos em `gold/`.
 6. **Athena** consulta os dados Gold direto do catálogo (sem mover dados), com um workgroup
    configurado com limite de bytes escaneados por query.
 7. O **notebook** (`notebooks/pipeline_alfabetizacao.ipynb`, roda local ou no Colab) orquestra

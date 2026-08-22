@@ -1,19 +1,18 @@
 """
 AWS Glue (PySpark) - camada GOLD.
 
-Le o dataset integrado da Silver (alfabetizacao_integrado) e produz 3
-datasets analiticos, prontos para dashboards / Athena / treinamento de
-modelos de ML:
+Le os datasets da Silver (resultado_municipio, resultado_uf, metas_*) e
+produz os 3 datasets analiticos pedidos no desafio:
 
-  1. indicador_por_municipio  -> % de alfabetizacao mais recente por
-     municipio/UF, pronto para mapa/ranking.
-  2. comparacao_metas_resultados -> indicador realizado vs meta definida
-     (nacional, estadual e municipal), com a diferenca (gap) calculada.
-  3. evolucao_temporal_indicador -> serie historica do indicador por UF
-     e Brasil, para grafico de evolucao ano a ano.
+  1. indicador_por_municipio  -> foto mais recente da taxa de
+     alfabetizacao por municipio/UF.
+  2. comparacao_metas_resultados -> taxa realizada vs. meta definida para
+     aquele mesmo ano (a Silver ja despivotou as metas de wide para long,
+     entao aqui e so um join por id_municipio + ano == ano_meta + rede).
+  3. evolucao_temporal_indicador -> serie historica por UF e por Brasil
+     (media da taxa realizada por ano).
 
-Parametros: --JOB_NAME, --DATALAKE_BUCKET, --GLUE_DATABASE (mesmo padrao
-do job Silver).
+Parametros: --JOB_NAME, --DATALAKE_BUCKET, --GLUE_DATABASE.
 """
 import sys
 
@@ -55,45 +54,60 @@ def write_gold(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
 
 
 def main():
-    integrado = read_silver("alfabetizacao_integrado")
+    resultado_municipio = read_silver("resultado_municipio")
+    resultado_uf = read_silver("resultado_uf")
+    metas_municipio = read_silver("metas_municipio")
 
-    # 1) Indicador mais recente por municipio.
-    janela_recente = Window.partitionBy("id_municipio").orderBy(F.col("ano").desc())
-    select_cols = ["id_municipio"]
-    if "nome_municipio" in integrado.columns:
-        select_cols.append("nome_municipio")
-    select_cols += ["sigla_uf", "ano", "percentual_alfabetizado"]
+    # 1) Indicador mais recente por municipio (uma linha por municipio+rede+serie).
+    janela_recente = Window.partitionBy("id_municipio", "rede", "serie").orderBy(
+        F.col("ano").desc()
+    )
     indicador_por_municipio = (
-        integrado
+        resultado_municipio
         .withColumn("rn", F.row_number().over(janela_recente))
         .filter(F.col("rn") == 1)
         .drop("rn")
-        .select(*select_cols)
+        .select(
+            "id_municipio", "nome_municipio", "sigla_uf", "ano", "rede", "serie",
+            "taxa_alfabetizacao",
+        )
     )
     write_gold(indicador_por_municipio, "indicador_por_municipio", partition_cols=["sigla_uf"])
 
-    # 2) Comparacao meta vs resultado (gap), quando a coluna de meta existir.
-    meta_col_candidates = [c for c in integrado.columns if "meta" in c.lower()]
-    if meta_col_candidates:
-        meta_col = meta_col_candidates[0]
-        comparacao = integrado.select(
-            "id_municipio", "sigla_uf", "ano",
-            F.col("percentual_alfabetizado").alias("resultado_realizado"),
-            F.col(meta_col).alias("meta_definida"),
-        ).withColumn(
-            "gap_percentual", F.col("resultado_realizado") - F.col("meta_definida")
+    # 2) Comparacao meta vs. resultado: junta o resultado do ano X com a meta
+    # que havia sido definida (em qualquer medicao anterior) PARA o ano X.
+    comparacao = (
+        resultado_municipio.alias("r")
+        .join(
+            metas_municipio.alias("m"),
+            on=[
+                F.col("r.id_municipio") == F.col("m.id_municipio"),
+                F.col("r.rede") == F.col("m.rede"),
+                F.col("r.ano") == F.col("m.ano_meta"),
+            ],
+            how="inner",
         )
-        write_gold(comparacao, "comparacao_metas_resultados", partition_cols=["ano"])
+        .select(
+            F.col("r.id_municipio").alias("id_municipio"),
+            F.col("r.sigla_uf").alias("sigla_uf"),
+            F.col("r.ano").alias("ano"),
+            F.col("r.rede").alias("rede"),
+            F.col("r.taxa_alfabetizacao").alias("resultado_realizado"),
+            F.col("m.meta_valor").alias("meta_definida"),
+        )
+        .withColumn("gap_percentual", F.col("resultado_realizado") - F.col("meta_definida"))
+    )
+    write_gold(comparacao, "comparacao_metas_resultados", partition_cols=["ano"])
 
-    # 3) Evolucao temporal do indicador, agregado por UF e por Brasil.
+    # 3) Evolucao temporal: media da taxa realizada por UF/ano e Brasil/ano.
     evolucao_uf = (
-        integrado.groupBy("sigla_uf", "ano")
-        .agg(F.avg("percentual_alfabetizado").alias("percentual_alfabetizado_medio"))
+        resultado_uf.groupBy("sigla_uf", "ano")
+        .agg(F.avg("taxa_alfabetizacao").alias("percentual_alfabetizado_medio"))
         .withColumn("nivel", F.lit("UF"))
     )
     evolucao_brasil = (
-        integrado.groupBy("ano")
-        .agg(F.avg("percentual_alfabetizado").alias("percentual_alfabetizado_medio"))
+        resultado_uf.groupBy("ano")
+        .agg(F.avg("taxa_alfabetizacao").alias("percentual_alfabetizado_medio"))
         .withColumn("sigla_uf", F.lit("BR"))
         .withColumn("nivel", F.lit("BRASIL"))
         .select("sigla_uf", "ano", "percentual_alfabetizado_medio", "nivel")

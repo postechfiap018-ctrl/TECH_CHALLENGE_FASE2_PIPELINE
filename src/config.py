@@ -50,33 +50,48 @@ GCP_SERVICE_ACCOUNT_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
 # ---------------------------------------------------------------------------
 # Tabelas de origem na Base dos Dados (BigQuery publico)
 #
-# IMPORTANTE: os table_id abaixo sao PLACEHOLDERS. A Base dos Dados e um
-# catalogo dinamico (SPA + GraphQL) e os nomes exatos de dataset/tabela
-# mudam por catalogo. Antes de rodar a extracao:
-#   1. Acesse https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72
-#      (dataset "Avaliacao da Alfabetizacao") e, para as tabelas de UF e
-#      Municipio, o dataset "Diretorios Brasileiros de Geografia".
-#   2. Para cada tabela, clique em "Acessar dados" > aba "BigQuery" -> copie
-#      o "table_id" completo (formato basedosdados.<dataset>.<tabela>).
-#   3. Cole o valor correspondente abaixo.
+# Confirmado em 2026-08-22 via a API GraphQL da Base dos Dados
+# (backend.basedosdados.org/graphql), a partir do link exato que o PDF do
+# desafio aponta para o dataset "Avaliacao da Alfabetizacao"
+# (https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72).
+# Esse dataset tem uma tabela para cada entidade pedida no enunciado (UF,
+# Municipio, Meta Alfabetizacao Brasil/UF/Municipio, Alunos).
+#
+# "uf"/"municipio" abaixo sao a dimensao TERRITORIAL (nome, sigla_uf) do
+# dataset publico de diretorios geograficos -- usada so para enriquecer os
+# resultados com nome do municipio/UF. Os RESULTADOS e METAS de
+# alfabetizacao propriamente ditos vem do dataset br_inep_avaliacao_alfabetizacao.
 # ---------------------------------------------------------------------------
 SOURCE_TABLES = {
+    # Dimensao territorial (nome, sigla_uf) -- enriquecimento, nao e o
+    # indicador em si.
     "uf": "basedosdados.br_bd_diretorios_brasil.uf",
     "municipio": "basedosdados.br_bd_diretorios_brasil.municipio",
-    "meta_alfabetizacao_brasil": "TODO_preencher_apos_consultar_basedosdados",
-    "meta_alfabetizacao_uf": "TODO_preencher_apos_consultar_basedosdados",
-    "meta_alfabetizacao_municipio": "TODO_preencher_apos_consultar_basedosdados",
-    "dados_alunos_indicador": "TODO_preencher_apos_consultar_basedosdados",
+    # Resultado realizado do indicador (taxa_alfabetizacao) + metas --
+    # dataset br_inep_avaliacao_alfabetizacao, entidades do enunciado.
+    "uf_resultado_alfabetizacao": "basedosdados.br_inep_avaliacao_alfabetizacao.uf",
+    "municipio_resultado_alfabetizacao": "basedosdados.br_inep_avaliacao_alfabetizacao.municipio",
+    "meta_alfabetizacao_brasil": "basedosdados.br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_brasil",
+    "meta_alfabetizacao_uf": "basedosdados.br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_uf",
+    "meta_alfabetizacao_municipio": "basedosdados.br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_municipio",
+    "alunos": "basedosdados.br_inep_avaliacao_alfabetizacao.alunos",
 }
+
+# Colunas com a trajetoria de metas (2024-2030) nas tabelas meta_alfabetizacao_*.
+# O Glue Job Silver despivota essas colunas (wide -> long) para comparar cada
+# ano com a meta definida para aquele mesmo ano.
+META_YEAR_COLUMNS = [f"meta_alfabetizacao_{ano}" for ano in range(2024, 2031)]
 
 # Colunas-chave usadas para join/validacao de integridade entre as tabelas.
 KEY_COLUMNS = {
     "uf": ["sigla_uf"],
     "municipio": ["id_municipio"],
-    "meta_alfabetizacao_brasil": ["ano"],
-    "meta_alfabetizacao_uf": ["sigla_uf", "ano"],
-    "meta_alfabetizacao_municipio": ["id_municipio", "ano"],
-    "dados_alunos_indicador": ["id_municipio", "ano"],
+    "uf_resultado_alfabetizacao": ["sigla_uf", "ano", "rede", "serie"],
+    "municipio_resultado_alfabetizacao": ["id_municipio", "ano", "rede", "serie"],
+    "meta_alfabetizacao_brasil": ["ano", "rede"],
+    "meta_alfabetizacao_uf": ["sigla_uf", "ano", "rede"],
+    "meta_alfabetizacao_municipio": ["id_municipio", "ano", "rede"],
+    "alunos": ["id_aluno", "ano"],
 }
 
 
