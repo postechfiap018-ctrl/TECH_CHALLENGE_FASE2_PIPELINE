@@ -196,7 +196,6 @@ def ensure_glue_job(job_name: str, script_s3_path: str, role_arn: str) -> None:
         "--GLUE_DATABASE": GLUE_DATABASE,
         "--enable-metrics": "true",
         "--enable-continuous-cloudwatch-log": "true",
-        "--job-bookmark-option": "job-bookmark-enable",  # so processa dado novo (FinOps)
     }
     config = dict(
         Role=role_arn,

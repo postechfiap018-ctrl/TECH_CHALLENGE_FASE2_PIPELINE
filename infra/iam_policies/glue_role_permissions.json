@@ -12,7 +12,7 @@
       "Effect": "Allow",
       "Action": [
         "glue:GetDatabase", "glue:GetDatabases", "glue:CreateDatabase",
-        "glue:GetTable", "glue:GetTables", "glue:CreateTable", "glue:UpdateTable",
+        "glue:GetTable", "glue:GetTables", "glue:CreateTable", "glue:UpdateTable", "glue:DeleteTable",
         "glue:GetPartition", "glue:GetPartitions", "glue:CreatePartition", "glue:BatchCreatePartition"
       ],
       "Resource": "*"

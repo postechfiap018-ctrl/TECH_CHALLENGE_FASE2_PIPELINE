@@ -1,39 +1,56 @@
 """
 AWS Glue (PySpark) - camada SILVER.
 
-Le todas as entidades da camada Bronze (batch + streaming), aplica:
-  - limpeza (drop de duplicatas exatas)
-  - tratamento de nulos (chaves nulas sao descartadas com log; demais
-    colunas numericas nulas viram 0 apenas quando fizer sentido de negocio
-    -- aqui deixamos como null explicito e documentamos a decisao no README)
-  - padronizacao de nomes/tipos (snake_case, sigla_uf upper, ids como string)
-  - normalizacao de chaves (id_municipio com 7 digitos, zero-padded)
-  - integracao: join de municipio + uf + metas + indicador em um dataset
-    unico "alfabetizacao_integrado"
+Le as entidades da camada Bronze (batch + streaming), aplica limpeza,
+padronizacao de nomes/tipos, normalizacao de chaves e integra:
 
-Grava o resultado particionado por ano em Parquet na camada Silver e
-atualiza o Glue Data Catalog (para consulta via Athena).
+  - Dimensao territorial: municipio + uf (nome, sigla_uf), do dataset
+    br_bd_diretorios_brasil.
+  - Resultado realizado do indicador (taxa_alfabetizacao) por municipio e
+    por UF, do dataset br_inep_avaliacao_alfabetizacao.
+  - Metas de alfabetizacao (Brasil/UF/Municipio): as tabelas de origem tem
+    uma coluna por ano-alvo (meta_alfabetizacao_2024 .. meta_alfabetizacao_2030,
+    "wide"). Aqui elas sao despivotadas para o formato longo
+    (ano_meta, meta_valor), o que permite comparar cada ano realizado com a
+    meta definida para aquele mesmo ano na camada Gold.
+  - Alunos: microdados da avaliacao (uma linha por aluno/ano).
 
-Parametros esperados (--JOB_NAME e os defaults sao injetados pelo Glue):
-    --DATALAKE_BUCKET   nome do bucket do data lake
-    --GLUE_DATABASE     database do Glue Catalog
+Grava cada dataset limpo em Parquet na camada Silver e cataloga
+automaticamente no Glue Data Catalog (via updateBehavior=UPDATE_IN_DATABASE),
+sem depender de um crawler separado.
 
-Deploy: este arquivo e enviado para
-    s3://<bucket>/glue-scripts/glue_silver_job.py
-pelo infra/provision_aws.py, que tambem cria o Glue Job apontando pra ele.
+Parametros (injetados pelo Glue): --JOB_NAME, --DATALAKE_BUCKET, --GLUE_DATABASE.
 """
 import sys
 
+import boto3
 from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
+from botocore.exceptions import ClientError
 from pyspark.context import SparkContext
-from pyspark.sql import DataFrame, functions as F
+from pyspark.sql import DataFrame, Window, functions as F
 from pyspark.sql.types import StringType
 
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "DATALAKE_BUCKET", "GLUE_DATABASE"])
 BUCKET = args["DATALAKE_BUCKET"]
 DATABASE = args["GLUE_DATABASE"]
+
+glue_client = boto3.client("glue")
+
+
+def drop_table_if_exists(table_name: str) -> None:
+    """updateBehavior=UPDATE_IN_DATABASE faz o catalogo ACUMULAR colunas
+    entre execucoes em vez de substituir o schema. Apagar a tabela antes de
+    escrever garante que o catalogo sempre reflita o schema atual."""
+    try:
+        glue_client.delete_table(DatabaseName=DATABASE, Name=table_name)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "EntityNotFoundException":
+            raise
+
+META_YEAR_COLUMNS = [f"meta_alfabetizacao_{ano}" for ano in range(2024, 2031)]
 
 sc = SparkContext()
 glueContext = GlueContext(sc)
@@ -79,13 +96,54 @@ def clean(df: DataFrame, key_columns: list[str]) -> DataFrame:
     return df
 
 
+def unpivot_metas(df: DataFrame, group_cols: list[str]) -> DataFrame:
+    """Transforma as colunas meta_alfabetizacao_2024..2030 (wide) em duas
+    colunas (ano_meta, meta_valor), no formato longo. Mantem as demais
+    colunas de agrupamento (ex.: id_municipio, sigla_uf, rede) e renomeia
+    o "ano" original (ano da medicao-base) para "ano_base" para nao colidir
+    com o novo "ano_meta"."""
+    existing_year_cols = [c for c in META_YEAR_COLUMNS if c in df.columns]
+    stack_expr = ", ".join(f"{c.split('_')[-1]}, `{c}`" for c in existing_year_cols)
+    n = len(existing_year_cols)
+
+    if "ano" in df.columns:
+        df = df.withColumnRenamed("ano", "ano_base")
+
+    select_cols = [c for c in group_cols if c in df.columns]
+    if "ano_base" in df.columns:
+        select_cols = select_cols + ["ano_base"]
+
+    unpivoted = df.select(
+        *select_cols,
+        F.expr(f"stack({n}, {stack_expr}) as (ano_meta, meta_valor)"),
+    ).withColumn("ano_meta", F.col("ano_meta").cast("int"))
+
+    # A meta para um dado ano_meta e republicada em toda medicao-base
+    # subsequente (ex.: a meta 2024 aparece tanto na medicao de 2023 quanto
+    # na de 2024) -- sem isso o join da Gold gera linha duplicada. Mantem
+    # so a versao mais recente (maior ano_base) de cada meta.
+    if "ano_base" in unpivoted.columns:
+        dedup_keys = [c for c in group_cols if c in unpivoted.columns] + ["ano_meta"]
+        janela = Window.partitionBy(*dedup_keys).orderBy(F.col("ano_base").desc())
+        unpivoted = (
+            unpivoted.withColumn("rn", F.row_number().over(janela))
+            .filter(F.col("rn") == 1)
+            .drop("rn")
+        )
+    return unpivoted
+
+
 def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
-    # Cataloga automaticamente no Glue Data Catalog (visivel no Athena)
-    # via updateBehavior=UPDATE_IN_DATABASE, sem depender de um crawler
-    # separado -- menos um recurso rodando (custo) e o catalogo fica
-    # sempre consistente com o que o job acabou de escrever.
+    # Cataloga automaticamente no Glue Data Catalog (visivel no Athena) via
+    # updateBehavior=UPDATE_IN_DATABASE, sem depender de um crawler separado.
     path = f"s3://{BUCKET}/silver/{entity}/"
-    dyf = glueContext.create_dynamic_frame.from_frame(df, name=entity)
+    # O sink do Glue NAO sobrescreve por padrao -- so acrescenta arquivos, e
+    # o catalogo ACUMULA colunas entre execucoes. Como cada execucao deve
+    # refletir um recalculo completo (nao um incremento), limpa os dois
+    # antes de escrever.
+    glueContext.purge_s3_path(path, options={"retentionPeriod": 0})
+    drop_table_if_exists(f"silver_{entity}")
+    dyf = DynamicFrame.fromDF(df, glueContext, entity)
     sink = glueContext.getSink(
         path=path,
         connection_type="s3",
@@ -100,49 +158,57 @@ def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
 
 
 def main():
-    uf = clean(read_bronze("uf"), ["sigla_uf"])
-    municipio = clean(read_bronze("municipio"), ["id_municipio"])
+    # --- Dimensao territorial -------------------------------------------------
+    # br_bd_diretorios_brasil.uf usa a coluna "sigla" (nao "sigla_uf" como as
+    # demais fontes) -- renomeia logo na entrada para integrar com o resto.
+    raw_uf = read_bronze("uf")
+    if "sigla" in raw_uf.columns:
+        raw_uf = raw_uf.withColumnRenamed("sigla", "sigla_uf")
+    uf_dim = clean(raw_uf, ["sigla_uf"]).select(
+        "sigla_uf", F.col("nome").alias("nome_uf")
+    )
+    municipio_dim = clean(read_bronze("municipio"), ["id_municipio"]).select(
+        "id_municipio", F.col("nome").alias("nome_municipio"), "sigla_uf"
+    )
+    write_silver(uf_dim, "uf", partition_cols=[])
+    write_silver(municipio_dim, "municipio", partition_cols=[])
 
-    try:
-        meta_brasil = clean(read_bronze("meta_alfabetizacao_brasil"), ["ano"])
-    except Exception:
-        meta_brasil = None
-    try:
-        meta_uf = clean(read_bronze("meta_alfabetizacao_uf"), ["sigla_uf", "ano"])
-    except Exception:
-        meta_uf = None
-    try:
-        meta_municipio = clean(read_bronze("meta_alfabetizacao_municipio"), ["id_municipio", "ano"])
-    except Exception:
-        meta_municipio = None
-    try:
-        indicador = clean(read_bronze("dados_alunos_indicador"), ["id_municipio", "ano"])
-    except Exception:
-        indicador = None
+    # --- Resultado realizado (taxa_alfabetizacao) ------------------------------
+    resultado_municipio = clean(
+        read_bronze("municipio_resultado_alfabetizacao"),
+        ["id_municipio", "ano", "rede", "serie"],
+    )
+    resultado_municipio_integrado = resultado_municipio.join(
+        municipio_dim, on="id_municipio", how="left"
+    )
+    write_silver(
+        resultado_municipio_integrado, "resultado_municipio", partition_cols=["ano"]
+    )
 
-    write_silver(uf, "uf", partition_cols=[])
-    write_silver(municipio, "municipio", partition_cols=[])
+    resultado_uf = clean(
+        read_bronze("uf_resultado_alfabetizacao"), ["sigla_uf", "ano", "rede", "serie"]
+    )
+    resultado_uf_integrado = resultado_uf.join(uf_dim, on="sigla_uf", how="left")
+    write_silver(resultado_uf_integrado, "resultado_uf", partition_cols=["ano"])
 
-    # Integracao: municipio + uf (via sigla_uf) + indicador + metas.
-    integrado = municipio.join(uf, on="sigla_uf", how="left")
+    # --- Metas (wide -> long: uma linha por ano-alvo) --------------------------
+    meta_brasil = clean(read_bronze("meta_alfabetizacao_brasil"), ["ano", "rede"])
+    metas_brasil_long = unpivot_metas(meta_brasil, group_cols=["rede"])
+    write_silver(metas_brasil_long, "metas_brasil", partition_cols=[])
 
-    if indicador is not None:
-        integrado = integrado.join(indicador, on="id_municipio", how="inner")
-        if meta_municipio is not None:
-            integrado = integrado.join(
-                meta_municipio, on=["id_municipio", "ano"], how="left"
-            )
-        if meta_uf is not None:
-            integrado = integrado.join(meta_uf, on=["sigla_uf", "ano"], how="left")
-        if meta_brasil is not None:
-            integrado = integrado.join(meta_brasil, on="ano", how="left")
+    meta_uf = clean(read_bronze("meta_alfabetizacao_uf"), ["sigla_uf", "ano", "rede"])
+    metas_uf_long = unpivot_metas(meta_uf, group_cols=["sigla_uf", "rede"])
+    write_silver(metas_uf_long, "metas_uf", partition_cols=[])
 
-        write_silver(integrado, "alfabetizacao_integrado", partition_cols=["ano"])
-    else:
-        # Sem o indicador ainda configurado em SOURCE_TABLES (ver src/config.py),
-        # gravamos ao menos a base territorial integrada para nao bloquear o
-        # restante da pipeline.
-        write_silver(integrado, "territorio_integrado", partition_cols=[])
+    meta_municipio = clean(
+        read_bronze("meta_alfabetizacao_municipio"), ["id_municipio", "ano", "rede"]
+    )
+    metas_municipio_long = unpivot_metas(meta_municipio, group_cols=["id_municipio", "rede"])
+    write_silver(metas_municipio_long, "metas_municipio", partition_cols=[])
+
+    # --- Alunos (microdados) ---------------------------------------------------
+    alunos = clean(read_bronze("alunos"), ["id_aluno", "ano"])
+    write_silver(alunos, "alunos", partition_cols=["ano"])
 
     job.commit()
 
