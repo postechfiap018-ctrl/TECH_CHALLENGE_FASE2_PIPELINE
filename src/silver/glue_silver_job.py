@@ -23,16 +23,32 @@ Parametros (injetados pelo Glue): --JOB_NAME, --DATALAKE_BUCKET, --GLUE_DATABASE
 """
 import sys
 
+import boto3
 from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
+from botocore.exceptions import ClientError
 from pyspark.context import SparkContext
-from pyspark.sql import DataFrame, functions as F
+from pyspark.sql import DataFrame, Window, functions as F
 from pyspark.sql.types import StringType
 
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "DATALAKE_BUCKET", "GLUE_DATABASE"])
 BUCKET = args["DATALAKE_BUCKET"]
 DATABASE = args["GLUE_DATABASE"]
+
+glue_client = boto3.client("glue")
+
+
+def drop_table_if_exists(table_name: str) -> None:
+    """updateBehavior=UPDATE_IN_DATABASE faz o catalogo ACUMULAR colunas
+    entre execucoes em vez de substituir o schema. Apagar a tabela antes de
+    escrever garante que o catalogo sempre reflita o schema atual."""
+    try:
+        glue_client.delete_table(DatabaseName=DATABASE, Name=table_name)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "EntityNotFoundException":
+            raise
 
 META_YEAR_COLUMNS = [f"meta_alfabetizacao_{ano}" for ano in range(2024, 2031)]
 
@@ -100,15 +116,34 @@ def unpivot_metas(df: DataFrame, group_cols: list[str]) -> DataFrame:
     unpivoted = df.select(
         *select_cols,
         F.expr(f"stack({n}, {stack_expr}) as (ano_meta, meta_valor)"),
-    )
-    return unpivoted.withColumn("ano_meta", F.col("ano_meta").cast("int"))
+    ).withColumn("ano_meta", F.col("ano_meta").cast("int"))
+
+    # A meta para um dado ano_meta e republicada em toda medicao-base
+    # subsequente (ex.: a meta 2024 aparece tanto na medicao de 2023 quanto
+    # na de 2024) -- sem isso o join da Gold gera linha duplicada. Mantem
+    # so a versao mais recente (maior ano_base) de cada meta.
+    if "ano_base" in unpivoted.columns:
+        dedup_keys = [c for c in group_cols if c in unpivoted.columns] + ["ano_meta"]
+        janela = Window.partitionBy(*dedup_keys).orderBy(F.col("ano_base").desc())
+        unpivoted = (
+            unpivoted.withColumn("rn", F.row_number().over(janela))
+            .filter(F.col("rn") == 1)
+            .drop("rn")
+        )
+    return unpivoted
 
 
 def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
     # Cataloga automaticamente no Glue Data Catalog (visivel no Athena) via
     # updateBehavior=UPDATE_IN_DATABASE, sem depender de um crawler separado.
     path = f"s3://{BUCKET}/silver/{entity}/"
-    dyf = glueContext.create_dynamic_frame.from_frame(df, name=entity)
+    # O sink do Glue NAO sobrescreve por padrao -- so acrescenta arquivos, e
+    # o catalogo ACUMULA colunas entre execucoes. Como cada execucao deve
+    # refletir um recalculo completo (nao um incremento), limpa os dois
+    # antes de escrever.
+    glueContext.purge_s3_path(path, options={"retentionPeriod": 0})
+    drop_table_if_exists(f"silver_{entity}")
+    dyf = DynamicFrame.fromDF(df, glueContext, entity)
     sink = glueContext.getSink(
         path=path,
         connection_type="s3",
@@ -124,7 +159,12 @@ def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
 
 def main():
     # --- Dimensao territorial -------------------------------------------------
-    uf_dim = clean(read_bronze("uf"), ["sigla_uf"]).select(
+    # br_bd_diretorios_brasil.uf usa a coluna "sigla" (nao "sigla_uf" como as
+    # demais fontes) -- renomeia logo na entrada para integrar com o resto.
+    raw_uf = read_bronze("uf")
+    if "sigla" in raw_uf.columns:
+        raw_uf = raw_uf.withColumnRenamed("sigla", "sigla_uf")
+    uf_dim = clean(raw_uf, ["sigla_uf"]).select(
         "sigla_uf", F.col("nome").alias("nome_uf")
     )
     municipio_dim = clean(read_bronze("municipio"), ["id_municipio"]).select(

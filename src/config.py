@@ -77,14 +77,31 @@ SOURCE_TABLES = {
     "alunos": "basedosdados.br_inep_avaliacao_alfabetizacao.alunos",
 }
 
+# Overrides de query por entidade (formatados com {table} = table_id). Usado
+# para a tabela de microdados "alunos" (~3.9 milhoes de linhas): nenhum dos
+# datasets Gold exigidos no desafio consome microdado de aluno diretamente
+# (todos partem das tabelas ja agregadas uf_resultado_alfabetizacao /
+# municipio_resultado_alfabetizacao) -- entao, para a extracao local via
+# pandas, uma amostra de 2% (TABLESAMPLE, amostragem por bloco no proprio
+# BigQuery) e suficiente para a entidade constar na Bronze com fidelidade
+# estatistica, sem pagar o custo/tempo de baixar a tabela inteira. Em uma
+# carga de producao real, isso rodaria via um job Glue/Spark lendo o
+# BigQuery diretamente (conector nativo), nao via pandas local.
+QUERY_OVERRIDES = {
+    "alunos": "SELECT * FROM `{table}` TABLESAMPLE SYSTEM (2 PERCENT)",
+}
+
 # Colunas com a trajetoria de metas (2024-2030) nas tabelas meta_alfabetizacao_*.
 # O Glue Job Silver despivota essas colunas (wide -> long) para comparar cada
 # ano com a meta definida para aquele mesmo ano.
 META_YEAR_COLUMNS = [f"meta_alfabetizacao_{ano}" for ano in range(2024, 2031)]
 
 # Colunas-chave usadas para join/validacao de integridade entre as tabelas.
+# Nota: br_bd_diretorios_brasil.uf usa a coluna "sigla" (nao "sigla_uf" como
+# as demais tabelas) -- confirmado inspecionando o schema real via BigQuery.
+# A camada Silver renomeia para "sigla_uf" ao integrar com as outras fontes.
 KEY_COLUMNS = {
-    "uf": ["sigla_uf"],
+    "uf": ["sigla"],
     "municipio": ["id_municipio"],
     "uf_resultado_alfabetizacao": ["sigla_uf", "ano", "rede", "serie"],
     "municipio_resultado_alfabetizacao": ["id_municipio", "ano", "rede", "serie"],

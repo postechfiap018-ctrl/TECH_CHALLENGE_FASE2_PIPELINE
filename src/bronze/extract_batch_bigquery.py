@@ -31,6 +31,7 @@ from src.config import (
     DATALAKE_BUCKET,
     GCP_BILLING_PROJECT,
     KEY_COLUMNS,
+    QUERY_OVERRIDES,
     SOURCE_TABLES,
 )
 from src.quality.data_quality_checks import run_quality_report, save_report_to_s3
@@ -57,7 +58,7 @@ def extract_entity(entity: str, table_id: str, ingestion_date: date) -> pd.DataF
             f"Tabela de origem para '{entity}' ainda nao configurada em src/config.py "
             "(SOURCE_TABLES). Consulte basedosdados.org e preencha o table_id."
         )
-    query = f"SELECT * FROM `{table_id}`"
+    query = QUERY_OVERRIDES.get(entity, "SELECT * FROM `{table}`").format(table=table_id)
     log.info("Extraindo %s de %s", entity, table_id)
     client = _bq_client()
     df = client.query(query).to_dataframe()
