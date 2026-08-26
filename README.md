@@ -221,8 +221,10 @@ quanto dentro dos jobs Glue:
   correspondente (`municipio`), reportando órfãos.
 
 Cada execução grava um relatório JSON versionado em
-`s3://bucket/governance/quality-reports/<camada>/<entidade>/dt_ingestao=.../report.json`,
-dando rastreabilidade/auditoria (governança).
+`s3://bucket/governance/quality-reports/bronze/<entidade>/dt_ingestao=.../report.json`
+(duplicidade/nulos/chaves) e em
+`s3://bucket/governance/quality-reports/referential-integrity/<filha>_x_<pai>/dt_ingestao=.../report.json`
+(consistência entre tabelas), dando rastreabilidade/auditoria (governança).
 
 ## Monitoramento
 

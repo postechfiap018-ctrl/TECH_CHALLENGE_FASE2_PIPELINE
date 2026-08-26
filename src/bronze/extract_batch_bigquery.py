@@ -18,6 +18,7 @@ Pre-requisitos (ver README para o passo a passo completo):
 from __future__ import annotations
 
 import io
+import json
 import logging
 from datetime import date
 
@@ -34,7 +35,11 @@ from src.config import (
     QUERY_OVERRIDES,
     SOURCE_TABLES,
 )
-from src.quality.data_quality_checks import run_quality_report, save_report_to_s3
+from src.quality.data_quality_checks import (
+    check_referential_integrity,
+    run_quality_report,
+    save_report_to_s3,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -84,9 +89,20 @@ def upload_parquet_to_bronze(df: pd.DataFrame, entity: str, ingestion_date: date
     return s3_uri
 
 
+# Pares (tabela filha, coluna) -> (tabela pai, coluna) para a checagem de
+# consistencia entre tabelas exigida no desafio: toda chave estrangeira
+# extraida precisa existir na tabela dimensao correspondente.
+REFERENTIAL_CHECKS = [
+    ("municipio_resultado_alfabetizacao", "id_municipio", "municipio", "id_municipio"),
+    ("meta_alfabetizacao_municipio", "id_municipio", "municipio", "id_municipio"),
+    ("alunos", "id_municipio", "municipio", "id_municipio"),
+]
+
+
 def run_batch_ingestion(ingestion_date: date | None = None) -> dict[str, str]:
     ingestion_date = ingestion_date or date.today()
     results: dict[str, str] = {}
+    dataframes: dict[str, pd.DataFrame] = {}
 
     for entity, table_id in SOURCE_TABLES.items():
         try:
@@ -110,8 +126,33 @@ def run_batch_ingestion(ingestion_date: date | None = None) -> dict[str, str]:
             ),
         )
 
+        dataframes[entity] = df
         s3_uri = upload_parquet_to_bronze(df, entity, ingestion_date)
         results[entity] = s3_uri
+
+    # Consistencia entre tabelas: confere se toda chave estrangeira extraida
+    # existe na tabela dimensao correspondente.
+    for child_entity, child_key, parent_entity, parent_key in REFERENTIAL_CHECKS:
+        if child_entity not in dataframes or parent_entity not in dataframes:
+            continue
+        integrity = check_referential_integrity(
+            dataframes[child_entity], dataframes[parent_entity], child_key, parent_key
+        )
+        if not integrity["passed"]:
+            log.warning(
+                "Integridade referencial: %d '%s' orfaos em '%s' (sem %s correspondente em '%s')",
+                integrity["orphan_count"], child_key, child_entity, parent_key, parent_entity,
+            )
+        s3_client = _s3_client()
+        s3_client.put_object(
+            Bucket=DATALAKE_BUCKET,
+            Key=(
+                f"governance/quality-reports/referential-integrity/"
+                f"{child_entity}_x_{parent_entity}/dt_ingestao={ingestion_date.isoformat()}/report.json"
+            ),
+            Body=json.dumps(integrity, ensure_ascii=False, default=str).encode("utf-8"),
+            ContentType="application/json",
+        )
 
     return results
 
