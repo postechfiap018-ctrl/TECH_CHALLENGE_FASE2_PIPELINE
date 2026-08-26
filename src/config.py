@@ -50,17 +50,15 @@ GCP_SERVICE_ACCOUNT_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
 # ---------------------------------------------------------------------------
 # Tabelas de origem na Base dos Dados (BigQuery publico)
 #
-# Confirmado em 2026-08-22 via a API GraphQL da Base dos Dados
-# (backend.basedosdados.org/graphql), a partir do link exato que o PDF do
-# desafio aponta para o dataset "Avaliacao da Alfabetizacao"
-# (https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72).
-# Esse dataset tem uma tabela para cada entidade pedida no enunciado (UF,
-# Municipio, Meta Alfabetizacao Brasil/UF/Municipio, Alunos).
+# O dataset "Avaliacao da Alfabetizacao" (link no PDF do desafio) tem uma
+# tabela para cada entidade pedida no enunciado (UF, Municipio, Meta
+# Alfabetizacao Brasil/UF/Municipio, Alunos):
+# https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72
 #
-# "uf"/"municipio" abaixo sao a dimensao TERRITORIAL (nome, sigla_uf) do
+# "uf"/"municipio" abaixo sao a dimensao territorial (nome, sigla_uf), do
 # dataset publico de diretorios geograficos -- usada so para enriquecer os
-# resultados com nome do municipio/UF. Os RESULTADOS e METAS de
-# alfabetizacao propriamente ditos vem do dataset br_inep_avaliacao_alfabetizacao.
+# resultados com nome do municipio/UF. Resultado e meta de alfabetizacao
+# vem do dataset br_inep_avaliacao_alfabetizacao.
 # ---------------------------------------------------------------------------
 SOURCE_TABLES = {
     # Dimensao territorial (nome, sigla_uf) -- enriquecimento, nao e o
@@ -77,16 +75,10 @@ SOURCE_TABLES = {
     "alunos": "basedosdados.br_inep_avaliacao_alfabetizacao.alunos",
 }
 
-# Overrides de query por entidade (formatados com {table} = table_id). Usado
-# para a tabela de microdados "alunos" (~3.9 milhoes de linhas): nenhum dos
-# datasets Gold exigidos no desafio consome microdado de aluno diretamente
-# (todos partem das tabelas ja agregadas uf_resultado_alfabetizacao /
-# municipio_resultado_alfabetizacao) -- entao, para a extracao local via
-# pandas, uma amostra de 2% (TABLESAMPLE, amostragem por bloco no proprio
-# BigQuery) e suficiente para a entidade constar na Bronze com fidelidade
-# estatistica, sem pagar o custo/tempo de baixar a tabela inteira. Em uma
-# carga de producao real, isso rodaria via um job Glue/Spark lendo o
-# BigQuery diretamente (conector nativo), nao via pandas local.
+# Overrides de query por entidade ({table} = table_id). A tabela "alunos"
+# tem ~3.9 milhoes de linhas de microdado; como o Gold usa as tabelas ja
+# agregadas por municipio/UF, uma amostra de 2% (TABLESAMPLE) basta para a
+# entidade constar na Bronze sem baixar a tabela inteira.
 QUERY_OVERRIDES = {
     "alunos": "SELECT * FROM `{table}` TABLESAMPLE SYSTEM (2 PERCENT)",
 }
@@ -97,9 +89,8 @@ QUERY_OVERRIDES = {
 META_YEAR_COLUMNS = [f"meta_alfabetizacao_{ano}" for ano in range(2024, 2031)]
 
 # Colunas-chave usadas para join/validacao de integridade entre as tabelas.
-# Nota: br_bd_diretorios_brasil.uf usa a coluna "sigla" (nao "sigla_uf" como
-# as demais tabelas) -- confirmado inspecionando o schema real via BigQuery.
-# A camada Silver renomeia para "sigla_uf" ao integrar com as outras fontes.
+# br_bd_diretorios_brasil.uf usa a coluna "sigla" (as demais tabelas usam
+# "sigla_uf") -- a Silver renomeia ao integrar com as outras fontes.
 KEY_COLUMNS = {
     "uf": ["sigla"],
     "municipio": ["id_municipio"],
