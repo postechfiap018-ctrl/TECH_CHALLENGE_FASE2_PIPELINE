@@ -54,14 +54,13 @@ educacional, integrando as seguintes entidades da plataforma **Base dos Dados**:
 | Meta Alfabetização por Município | `br_inep_avaliacao_alfabetizacao.meta_alfabetizacao_municipio` | Metas municipais (2024-2030) |
 | Dados de alunos | `br_inep_avaliacao_alfabetizacao.alunos` | Microdados da avaliação (uma linha por aluno) |
 
-Os `table_id` acima foram confirmados diretamente na API da Base dos Dados (não por
-adivinhação), a partir do link que o próprio PDF do desafio aponta para o dataset
-["Avaliação da Alfabetização"](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72).
-As tabelas de meta trazem a trajetória de metas em colunas largas
+Os `table_id` acima correspondem ao dataset
+["Avaliação da Alfabetização"](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72)
+indicado no PDF do desafio. As tabelas de meta trazem a trajetória de metas em colunas largas
 (`meta_alfabetizacao_2024` .. `meta_alfabetizacao_2030`) — a camada Silver despivota isso
 para um formato longo (`ano_meta`, `meta_valor`) antes de comparar com o resultado realizado.
 
-Outra particularidade descoberta ao rodar a pipeline contra os dados reais: a coluna `rede`
+Outra particularidade do dataset: a coluna `rede`
 vem como **código numérico** nas tabelas de resultado (0=Total, 1=Federal, 2=Estadual,
 3=Municipal, 4=Privada, 5=Pública Estadual+Municipal, 6=Pública Federal+Estadual+Municipal —
 ver a tabela `dicionario` do próprio dataset), mas como **texto fixo** nas tabelas de meta
@@ -251,7 +250,7 @@ dando rastreabilidade/auditoria (governança).
 - **Kinesis on-demand**: sem shards provisionados ociosos.
 - **Lambda com memória mínima prática (256MB)** e pacote de deploy enxuto (sem dependências
   pesadas no consumer de streaming).
-- **Estimativa de custo** (uso esporádico, cenário de disciplina/demo, região `sa-east-1`):
+- **Estimativa de custo** (uso esporádico, cenário de disciplina/demo, região `us-east-2`):
   S3 (poucos GB) ≈ US$ 0,05–0,20/mês; Glue (poucos minutos por execução, G.1X x2) ≈ US$
   0,01–0,05 por execução; Athena (queries pequenas, particionadas) ≈ centavos por query;
   Kinesis on-demand + Lambda ≈ centavos por sessão de demonstração. **Recomendação**: rode
@@ -299,11 +298,10 @@ FUNDEB.
 │   └── lambda/
 │       ├── streaming_consumer/handler.py  # Kinesis -> S3 bronze
 │       └── trigger_glue/handler.py        # S3 -> dispara Glue Silver
-├── infra/
-│   ├── provision_aws.py               # IaC (boto3), idempotente
-│   ├── teardown_aws.py                # desmonta tudo (FinOps)
-│   └── iam_policies/*.json            # trust/permission policies (Glue e Lambda)
-└── docs/                              # material de apoio (opcional)
+└── infra/
+    ├── provision_aws.py               # IaC (boto3), idempotente
+    ├── teardown_aws.py                # desmonta tudo (FinOps)
+    └── iam_policies/*.json            # trust/permission policies (Glue e Lambda)
 ```
 
 ## Passo a passo de setup
@@ -324,11 +322,11 @@ FUNDEB.
 4. Finalize a criação e **na tela de sucesso** (ou em Users → extrator-datalake → Security
    credentials → Create access key → "Application running outside AWS") copie o **Access Key
    ID** e o **Secret Access Key**. A secret key só aparece uma vez — guarde com cuidado.
-5. No seu terminal (local, fora do Claude Code — nunca cole chaves em uma sessão de agente):
+5. No seu terminal local:
    ```bash
    aws configure
    ```
-   Informe o Access Key ID, o Secret Access Key e a região `sa-east-1` (ou a que preferir,
+   Informe o Access Key ID, o Secret Access Key e a região `us-east-2` (ou a que preferir,
    ajustando `AWS_REGION` em `src/config.py`).
 6. Confirme que funcionou:
    ```bash
@@ -349,9 +347,18 @@ garanta que a **BigQuery API** está ativada e que a service account tem o papel
 3. Guarde o caminho do arquivo JSON — o notebook vai pedir esse caminho (local) ou pedir
    upload do arquivo (Colab).
 
-### 3. Provisionar a AWS
+### 3. Conectar ao GitHub
 
-Depois dos passos 1–3, com `aws sts get-caller-identity` funcionando:
+Repositório: https://github.com/postechfiap018-ctrl/TECH_CHALLENGE_FASE2_PIPELINE
+
+O histórico está organizado em `main` + branches de feature (`feature/bronze-ingestion`,
+`feature/silver-gold-glue`, `feature/streaming-lambdas`, `feature/infra-provisioning`,
+`feature/notebook-orchestration`, `feature/docs-readme`, `fix/tabelas-reais-basedosdados`),
+cada uma com commits focados e descritivos, integradas via **Pull Request** para `main`.
+
+### 4. Provisionar a AWS
+
+Depois dos passos 1–2, com `aws sts get-caller-identity` funcionando:
 
 ```bash
 pip install -r requirements.txt
