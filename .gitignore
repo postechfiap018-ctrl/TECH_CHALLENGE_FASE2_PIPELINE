@@ -1,4 +1,4 @@
-# Credenciais - NUNCA versionar
+# Credenciais 
 *.json
 !infra/iam_policies/*.json
 .env
@@ -32,11 +32,6 @@ data/
 .DS_Store
 Thumbs.db
 
-# Material de aula (nao faz parte do entregavel do repositorio)
-*.pdf
-
-# Notebook de rascunho anterior (substituido por notebooks/pipeline_alfabetizacao.ipynb)
-/AWS.ipynb
 
 # Terraform-like state, se vier a existir
 *.tfstate
