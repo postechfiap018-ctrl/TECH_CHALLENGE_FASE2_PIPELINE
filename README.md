@@ -181,6 +181,7 @@ flowchart LR
 | **AWS Glue (PySpark)** | ETL serverless, escala automaticamente, sem cluster para gerenciar; paga por DPU-hora usada. Escolhido em vez de EMR (custo/gestão) para o volume deste dataset. |
 | **AWS Lambda** | Orquestração leve orientada a evento (S3 → Silver) e consumo do streaming — sem servidor ocioso. |
 | **Amazon Kinesis Data Streams (on-demand)** | Simula ingestão quase em tempo real com custo proporcional ao uso, sem provisionar shards fixos. |
+| **Apache Kafka** (demo complementar) | Tecnologia de streaming vista em aula; demonstrada em `notebooks/kafka_streaming_demo.ipynb` com o mesmo evento do producer real. Não usada na pipeline de produção — ver trade-off em "Decisões arquiteturais". |
 | **AWS Glue Data Catalog + Athena** | Camada analítica "sem servidor": consulta SQL direto no S3, sem duplicar dados em um data warehouse. |
 | **CloudWatch** | Métricas e alarmes nativos de Lambda/Glue, sem ferramenta extra de observabilidade. |
 | **Google BigQuery (dataset público `basedosdados`)** | Fonte oficial dos dados do desafio; consulta sem custo de armazenamento, só o billing project paga pelos bytes escaneados. |
@@ -193,6 +194,15 @@ flowchart LR
   de eventos de atualização (não existe um endpoint de eventos real da Base dos Dados), para
   demonstrar o padrão de ingestão híbrida pedido no desafio, sem inventar uma fonte externa
   fictícia.
+- **Kafka vs. Kinesis**: em aula, o streaming foi ensinado com Apache Kafka (broker local,
+  `kafka-python`, consumer groups, janelas). A pipeline de produção usa **Amazon Kinesis**
+  em vez de Kafka porque já está 100% na AWS: Kinesis é gerenciado (sem broker para manter
+  no ar) e integra nativamente com Lambda via *event source mapping* — rodar Kafka em
+  produção exigiria Amazon MSK, com custo e operação extras para o volume deste desafio.
+  Para demonstrar o domínio da tecnologia vista em aula, há um notebook complementar,
+  [`notebooks/kafka_streaming_demo.ipynb`](notebooks/kafka_streaming_demo.ipynb), que
+  reproduz o mesmo cenário de eventos (mesmo formato de mensagem do producer real) com
+  Kafka local — ver a tabela comparativa no fim desse notebook.
 - **Data lake vs. data warehouse**: optamos por data lake (S3 + Parquet + Glue Catalog +
   Athena) em vez de um data warehouse gerenciado (ex.: Redshift). Para o volume de dados do
   desafio (dezenas de MB a poucos GB), um DW dedicado teria custo fixo maior sem ganho de
@@ -288,7 +298,8 @@ FUNDEB.
 ├── README.md
 ├── requirements.txt
 ├── notebooks/
-│   └── pipeline_alfabetizacao.ipynb   # orquestra tudo, roda local ou no Colab
+│   ├── pipeline_alfabetizacao.ipynb   # orquestra tudo, roda local ou no Colab
+│   └── kafka_streaming_demo.ipynb     # demo complementar: streaming com Kafka (só Colab)
 ├── src/
 │   ├── config.py                      # config central (bucket, região, tabelas de origem)
 │   ├── bronze/

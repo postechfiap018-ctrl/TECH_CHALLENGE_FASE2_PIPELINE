@@ -22,6 +22,7 @@ sem depender de um crawler separado.
 Parametros (injetados pelo Glue): --JOB_NAME, --DATALAKE_BUCKET, --GLUE_DATABASE.
 """
 import sys
+import logging
 
 import boto3
 from awsglue.context import GlueContext
@@ -33,9 +34,26 @@ from pyspark.context import SparkContext
 from pyspark.sql import DataFrame, Window, functions as F
 from pyspark.sql.types import StringType
 
+# ============================================================
+# LOGGING
+# ============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
+log = logging.getLogger(__name__)
+
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "DATALAKE_BUCKET", "GLUE_DATABASE"])
 BUCKET = args["DATALAKE_BUCKET"]
 DATABASE = args["GLUE_DATABASE"]
+
+log.info("=" * 60)
+log.info(f"JOB     : {args['JOB_NAME']}")
+log.info(f"CAMADA  : SILVER -> s3://{BUCKET}/silver/")
+log.info(f"CATALOGO: {DATABASE}")
+log.info("=" * 60)
 
 glue_client = boto3.client("glue")
 
@@ -133,10 +151,10 @@ def unpivot_metas(df: DataFrame, group_cols: list[str]) -> DataFrame:
     return unpivoted
 
 
-def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
-    # Cataloga automaticamente no Glue Data Catalog (visivel no Athena) via
-    # updateBehavior=UPDATE_IN_DATABASE, sem depender de um crawler separado.
+def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> int:
     path = f"s3://{BUCKET}/silver/{entity}/"
+    log.info(f"[SILVER] Salvando '{entity}' em: {path}")
+
     # O sink do Glue NAO sobrescreve por padrao -- so acrescenta arquivos, e
     # o catalogo ACUMULA colunas entre execucoes. Como cada execucao deve
     # refletir um recalculo completo (nao um incremento), limpa os dois
@@ -156,9 +174,16 @@ def write_silver(df: DataFrame, entity: str, partition_cols: list[str]) -> None:
     sink.setCatalogInfo(catalogDatabase=DATABASE, catalogTableName=f"silver_{entity}")
     sink.writeFrame(dyf)
 
+    count = df.count()
+    log.info(f"[SILVER] '{entity}': {count} registros salvos | tabela=silver_{entity}")
+    return count
+
 
 def main():
+    resultados = {}
+
     # --- Dimensao territorial -------------------------------------------------
+    log.info("[SILVER] Iniciando dimensao territorial (uf, municipio)")
     # br_bd_diretorios_brasil.uf usa a coluna "sigla" (nao "sigla_uf" como as
     # demais fontes) -- renomeia logo na entrada para integrar com o resto.
     raw_uf = read_bronze("uf")
@@ -170,10 +195,11 @@ def main():
     municipio_dim = clean(read_bronze("municipio"), ["id_municipio"]).select(
         "id_municipio", F.col("nome").alias("nome_municipio"), "sigla_uf"
     )
-    write_silver(uf_dim, "uf", partition_cols=[])
-    write_silver(municipio_dim, "municipio", partition_cols=[])
+    resultados["uf"] = write_silver(uf_dim, "uf", partition_cols=[])
+    resultados["municipio"] = write_silver(municipio_dim, "municipio", partition_cols=[])
 
     # --- Resultado realizado (taxa_alfabetizacao) ------------------------------
+    log.info("[SILVER] Iniciando resultado realizado (municipio, uf)")
     resultado_municipio = clean(
         read_bronze("municipio_resultado_alfabetizacao"),
         ["id_municipio", "ano", "rede", "serie"],
@@ -181,7 +207,7 @@ def main():
     resultado_municipio_integrado = resultado_municipio.join(
         municipio_dim, on="id_municipio", how="left"
     )
-    write_silver(
+    resultados["resultado_municipio"] = write_silver(
         resultado_municipio_integrado, "resultado_municipio", partition_cols=["ano"]
     )
 
@@ -189,26 +215,39 @@ def main():
         read_bronze("uf_resultado_alfabetizacao"), ["sigla_uf", "ano", "rede", "serie"]
     )
     resultado_uf_integrado = resultado_uf.join(uf_dim, on="sigla_uf", how="left")
-    write_silver(resultado_uf_integrado, "resultado_uf", partition_cols=["ano"])
+    resultados["resultado_uf"] = write_silver(
+        resultado_uf_integrado, "resultado_uf", partition_cols=["ano"]
+    )
 
     # --- Metas (wide -> long: uma linha por ano-alvo) --------------------------
+    log.info("[SILVER] Iniciando metas (brasil, uf, municipio) -- despivotando wide->long")
     meta_brasil = clean(read_bronze("meta_alfabetizacao_brasil"), ["ano", "rede"])
     metas_brasil_long = unpivot_metas(meta_brasil, group_cols=["rede"])
-    write_silver(metas_brasil_long, "metas_brasil", partition_cols=[])
+    resultados["metas_brasil"] = write_silver(metas_brasil_long, "metas_brasil", partition_cols=[])
 
     meta_uf = clean(read_bronze("meta_alfabetizacao_uf"), ["sigla_uf", "ano", "rede"])
     metas_uf_long = unpivot_metas(meta_uf, group_cols=["sigla_uf", "rede"])
-    write_silver(metas_uf_long, "metas_uf", partition_cols=[])
+    resultados["metas_uf"] = write_silver(metas_uf_long, "metas_uf", partition_cols=[])
 
     meta_municipio = clean(
         read_bronze("meta_alfabetizacao_municipio"), ["id_municipio", "ano", "rede"]
     )
     metas_municipio_long = unpivot_metas(meta_municipio, group_cols=["id_municipio", "rede"])
-    write_silver(metas_municipio_long, "metas_municipio", partition_cols=[])
+    resultados["metas_municipio"] = write_silver(
+        metas_municipio_long, "metas_municipio", partition_cols=[]
+    )
 
     # --- Alunos (microdados) ---------------------------------------------------
+    log.info("[SILVER] Iniciando alunos (microdados)")
     alunos = clean(read_bronze("alunos"), ["id_aluno", "ano"])
-    write_silver(alunos, "alunos", partition_cols=["ano"])
+    resultados["alunos"] = write_silver(alunos, "alunos", partition_cols=["ano"])
+
+    log.info("=" * 60)
+    log.info("SUMARIO SILVER")
+    for entidade, total in resultados.items():
+        log.info(f"  {entidade:<28}: {total} registros")
+    log.info(f"  Proxima etapa: executar o job Gold")
+    log.info("=" * 60)
 
     job.commit()
 

@@ -30,7 +30,11 @@ import boto3
 
 from src.config import AWS_REGION, KINESIS_STREAM_NAME
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
 log = logging.getLogger(__name__)
 
 # Amostra pequena de municipios/UF para gerar eventos sinteticos plausiveis.

@@ -41,7 +41,11 @@ from src.quality.data_quality_checks import (
     save_report_to_s3,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
 log = logging.getLogger(__name__)
 
 
@@ -101,6 +105,14 @@ REFERENTIAL_CHECKS = [
 
 def run_batch_ingestion(ingestion_date: date | None = None) -> dict[str, str]:
     ingestion_date = ingestion_date or date.today()
+
+    log.info("=" * 60)
+    log.info("JOB     : extract_batch_bigquery")
+    log.info("CAMADA  : BRONZE -> s3://%s/%s/", DATALAKE_BUCKET, BRONZE_PREFIX)
+    log.info("DATA    : %s", ingestion_date.isoformat())
+    log.info("ENTIDADES: %s", ", ".join(SOURCE_TABLES.keys()))
+    log.info("=" * 60)
+
     results: dict[str, str] = {}
     dataframes: dict[str, pd.DataFrame] = {}
 
@@ -153,6 +165,13 @@ def run_batch_ingestion(ingestion_date: date | None = None) -> dict[str, str]:
             Body=json.dumps(integrity, ensure_ascii=False, default=str).encode("utf-8"),
             ContentType="application/json",
         )
+
+    log.info("=" * 60)
+    log.info("SUMARIO BRONZE")
+    for entidade, s3_uri in results.items():
+        log.info(f"  {entidade:<34}: {s3_uri}")
+    log.info(f"  Proxima etapa: executar o job Glue Silver")
+    log.info("=" * 60)
 
     return results
 
