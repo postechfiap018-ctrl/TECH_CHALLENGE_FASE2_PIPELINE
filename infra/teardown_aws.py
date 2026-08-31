@@ -1,5 +1,5 @@
 """
-Desmonta os recursos criados por infra/provision_aws.py.
+script de teardown (FinOps - custo zero apos o uso)
 
 Uso:
     python -m infra.teardown_aws --yes
