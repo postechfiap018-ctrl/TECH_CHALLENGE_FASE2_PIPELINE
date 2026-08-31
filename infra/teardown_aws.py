@@ -1,8 +1,5 @@
 """
-Desmonta os recursos criados por infra/provision_aws.py. Rode isso quando
-terminar de gravar o video/testar, para nao deixar nada gerando custo
-(pratica de FinOps). O bucket S3 e' esvaziado e removido por ultimo,
-com confirmacao manual (--yes) porque e destrutivo.
+Desmonta os recursos criados por infra/provision_aws.py.
 
 Uso:
     python -m infra.teardown_aws --yes
