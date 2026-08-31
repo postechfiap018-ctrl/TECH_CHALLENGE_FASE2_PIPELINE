@@ -19,6 +19,7 @@ públicos da **Base dos Dados** (BigQuery), sobre o **Indicador Criança Alfabet
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Passo a passo de setup](#passo-a-passo-de-setup)
 - [Como rodar](#como-rodar)
+- [Evidências de execução](#evidências-de-execução)
 - [Vídeo executivo](#vídeo-executivo)
 
 ## Contexto do problema
@@ -376,3 +377,9 @@ Silver/Gold → qualidade → Athena → visualizações).
 
 Ao terminar os testes/gravação do vídeo, rode `python -m infra.teardown_aws --yes` para
 remover os recursos da AWS e não deixar custo residual.
+
+## Evidências de execução
+
+Ver [`EVIDENCIAS.md`](EVIDENCIAS.md) — histórico real de execuções dos jobs Glue, logs do
+CloudWatch, contagem de linhas via Athena e o passo a passo de quais prints/vídeo capturar no
+Console AWS.
