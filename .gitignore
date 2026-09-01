@@ -32,6 +32,11 @@ data/
 .DS_Store
 Thumbs.db
 
+# Material de aula (nao faz parte do entregavel do repositorio)
+*.pdf
+
+# Notebook de rascunho anterior (substituido por notebooks/pipeline_alfabetizacao.ipynb)
+/AWS.ipynb
 
 # Material de referencia da aula (nao faz parte do entregavel do repositorio)
 /codigos exemplos techchallenge 2/
